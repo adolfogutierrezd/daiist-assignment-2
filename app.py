@@ -17,14 +17,17 @@ import plotly.express as px
 import plotly.graph_objects as go
 from ultralytics import YOLO
 
+from preprocess import remove_frame
+
 ART = Path("artifacts")
 cfg = json.load(open(ART / "config.json"))
-model = YOLO("weights/skin_yolo11n_cls.pt")
+model = YOLO(cfg["model_file"])  # the model train.py kept (lower validation cost)
 test = pd.read_csv(ART / "predictions_test.csv")
 sweep = pd.read_csv(ART / "cost_sweep_test.csv")
 per_class = pd.read_csv(ART / "per_class_test.csv")
 confusion = pd.read_csv(ART / "confusion_test.csv", index_col=0)
 alternatives = pd.read_csv(ART / "alternatives_test.csv")
+models = pd.read_csv(ART / "model_comparison.csv")
 staffing = pd.read_csv(ART / "staffing_options_test.csv")
 
 POSITIVE = cfg["positive_classes"]
@@ -49,8 +52,9 @@ def cost_per_1000(df, low, high):
     out = outcomes(df["score"].values, low, high)
     miss = df["true"].map(cfg["miss_cost"]).fillna(0).values
     pos = df["positive"].values
-    cost = np.select([out == "pass", out == "review"],
-                     [miss, cfg["review"] + pos * cfg["appointment"]], cfg["appointment"])
+    # Review: the dermatologist catches (1 - review_miss) of cancers and misses the rest
+    review = cfg["review"] + pos * ((1 - cfg["review_miss"]) * cfg["appointment"] + cfg["review_miss"] * miss)
+    cost = np.select([out == "pass", out == "review"], [miss, review], cfg["appointment"])
     w = case_weights(df)
     return 1000 * np.sum(w * cost), np.sum(w * (out == "review")), out
 
@@ -61,6 +65,8 @@ def cost_per_1000(df, low, high):
 def classify(image, low, high):
     if image is None:
         return None, "Upload a photo of a skin lesion."
+    if cfg["remove_frame"]:
+        image = remove_frame(image)  # same preprocessing the model was trained with
     r = model.predict(image, imgsz=224, verbose=False)[0]
     probs = {model.names[k]: float(p) for k, p in enumerate(r.probs.data.cpu().numpy())}
     score = sum(probs[c] for c in POSITIVE)
@@ -94,7 +100,7 @@ def band_view(low, high):
           f"- Melanomas sent home: **{int(cm.loc['Melanoma', 'pass'])} of {int(cm.loc['Melanoma'].sum())}** test melanomas\n"
           f"- Chosen on validation: pass < **{cfg['low']}**, fail ≥ **{cfg['high']}**\n\n"
           f"*Costs at a {cfg['base_rate']:.0%} base rate of malignant photos. Appointment €{cfg['appointment']}, "
-          f"review €{cfg['review']}, missed cancer: " +
+          f"review €{cfg['review']} (dermatologist misses {cfg['review_miss']:.0%} of cancers), missed cancer: " +
           ", ".join(f"{k} €{v:,}" for k, v in cfg['miss_cost'].items()) + ".*")
     return fig, md
 
@@ -126,7 +132,7 @@ def confusion_plot():
 # ---------------------------------------------------------------------------
 with gr.Blocks(title="Skin lesion triage") as demo:
     gr.Markdown("# Skin lesion triage: pass, dermatologist review, or appointment\n"
-                "YOLO11n-cls finetuned on ISIC lesion images. Loaded from `weights/` and `artifacts/`; "
+                f"YOLO11n-cls finetuned on ISIC lesion images (model: `{cfg['model_file']}`). Loaded from `weights/` and `artifacts/`; "
                 "nothing is trained here. **University exercise, not a medical device.**")
     with gr.Row():
         low = gr.Slider(0, 1, value=cfg["low"], step=0.01, label="Pass below (low threshold)")
@@ -155,6 +161,7 @@ with gr.Blocks(title="Skin lesion triage") as demo:
         gr.Dataframe(per_class, label="Per-class precision and recall (test set)")
         gr.Plot(confusion_plot())
         gr.JSON(cfg["baselines"], label="Accuracy vs baselines (test set)")
+        gr.Dataframe(models, label="Original images vs dermoscope frame removed (thresholds chosen on validation)")
 
 if __name__ == "__main__":
     demo.launch()
