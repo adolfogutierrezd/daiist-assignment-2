@@ -93,10 +93,66 @@ magnifying lens in a clinic), while patients would send **phone photos**.
 
 ## What the dataset's composition implies
 
-*Instances per class, train/val/test sizes, typical object size relative to the
-image. Then the interpretation: which per-class numbers will be too thin to
-trust, whether the test split resembles the images you'd really see, and what
-you therefore can't conclude from your results.*
+I downloaded version 2 and counted the images myself (one image = one
+lesion = one label, since this is classification).
+
+| Class | Malignant? | Train | Valid | Test | Total | Share |
+|---|---|---|---|---|---|---|
+| AK – actinic keratosis | 🟠 pre-malignant | 455 | 130 | 66 | 651 | 12.9% |
+| BCC – basal cell carcinoma | 🔴 yes | 562 | 185 | 74 | 821 | 16.3% |
+| MEL – melanoma | 🔴 yes | 582 | 170 | 83 | 835 | 16.6% |
+| SCC – squamous cell carcinoma | 🔴 yes | 405 | 112 | 62 | 579 | 11.5% |
+| NV – nevus (mole) | 🟢 no | 590 | 171 | 95 | 856 | 17.0% |
+| BKL – benign keratosis | 🟢 no | 570 | 151 | 85 | 806 | 16.0% |
+| DF – dermatofibroma | 🟢 no | 156 | 54 | 29 | 239 | 4.7% |
+| VASC – vascular lesion | 🟢 no | 197 | 33 | 23 | 253 | 5.0% |
+| **Total** | | **3,517** | **1,006** | **517** | **5,040** | |
+
+- **Split:** 70% / 20% / 10%. Every class appears in every split.
+- **Image size:** all 224×224 pixels, colour.
+- **Object size:** this is classification, so there are no boxes. Every image
+  is a close-up centred on one lesion, which fills most of the frame. The
+  catch is the resolution: at 224×224, fine details a dermatologist looks for
+  (small dots, thin lines) are partly lost.
+
+**What this implies**
+
+1. **Positives are far over-represented.** 57% of the images (and 55% of the
+   test set: 285 of 517) are malignant or pre-malignant. In a real
+   teledermatology inbox most photos are of harmless moles, and only a small
+   share are cancer. The dataset was clearly balanced on purpose (NV, the most
+   common lesion in real life, has about the same count as melanoma). So
+   **costs measured directly on the test set would be wrong**: before choosing
+   thresholds I re-weight the test cases to a realistic base rate (see *Cost
+   matrix and operating point*).
+2. **Some per-class numbers are too thin to trust.** The test set has only
+   **23 VASC and 29 DF** images. One more or one fewer mistake moves their
+   recall by 3–4 points, so I won't draw conclusions about those two classes.
+   Melanoma (83 test images) is enough for a rough number, but its recall
+   still has an uncertainty of several points.
+3. **Duplicates across splits.** File names never repeat across splits, but
+   comparing the centre of every image I found **6 near-identical pairs in
+   different splits**, the same lesion saved under two ISIC numbers. **5 of
+   them are test images that also appear in training** (4 SCC, 1 BKL). That is
+   1% of the test set, so it inflates the results only slightly, but SCC's
+   test number is the most affected (4 of its 62 test images were seen in
+   training).
+4. **A possible shortcut: the dermoscope frame.** A third of the images (1,685)
+   have the round black border of a dermoscope. It is much more common in the
+   cancer classes than in the benign ones:
+
+   | AK | BCC | SCC | MEL | DF | BKL | VASC | NV |
+   |---|---|---|---|---|---|---|---|
+   | 53% | 45% | 40% | 37% | 27% | 26% | 19% | 12% |
+
+   A model could learn "black frame → cancer" instead of looking at the
+   lesion. I check this after training (*Per-class evaluation and failure
+   modes*).
+5. **The test set doesn't look like production.** These are dermoscopic
+   images taken by clinicians: lit evenly, in focus, lesion centred. Patients
+   would send phone photos, with shadows, blur, hair and different skin
+   tones. **So the test results are an upper bound** on how well the model
+   would really work, and I can't conclude it is ready for patient photos.
 
 ## Finetuning and baselines
 
