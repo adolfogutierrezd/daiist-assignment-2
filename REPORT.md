@@ -156,38 +156,256 @@ lesion = one label, since this is classification).
 
 ## Finetuning and baselines
 
-*Which model and task (detection or classification) and why. A results table on
-the same test split: your finetuned model, the pretrained COCO model zero-shot,
-and a trivial baseline. What changed, and whether the gap is as large as you
-expected.*
+**Task: image classification**, because each photo shows one lesion and the
+decision is about the whole photo (does this lesion need a dermatologist?).
+There is nothing to locate, so boxes would add work without adding
+information. **Model: `yolo11n-cls`**, the smallest YOLO11 classifier
+(1.5 million parameters), finetuned from its ImageNet-pretrained checkpoint.
+A small model is enough for 3,517 training images and trains quickly.
+
+**Where and how I trained it.** On my laptop (MacBook, Apple M3, 16 GB),
+using the Mac GPU (PyTorch MPS), in about 14 minutes:
+`epochs=40, patience=10, imgsz=224, batch=64, seed=0, flipud=0.5`, with all
+other settings at the Ultralytics defaults. I turned on vertical flips
+because a photo of a lesion has no "up", so a flipped lesion is still a
+realistic example. The best epoch (chosen on validation accuracy) is saved
+as `weights/skin_yolo11n_cls.pt`.
+
+**Results on the same test split (517 images):**
+
+| Model | 8-class accuracy | What it does |
+|---|---|---|
+| **Finetuned yolo11n-cls** | **66.2%** (top-5: 98.6%) | Learns the 8 lesion types |
+| Trivial baseline: always "NV" | 18.4% | Calls everything a mole (the most common training class), so it **refers nobody** |
+| Pretrained model, zero-shot | 0% | Its 1,000 ImageNet classes contain no skin lesions. It called 210 of the 517 lesions a **"tick"**, 75 "face powder" and 52 "velvet" |
+
+For the business decision (malignant vs benign), the finetuned model's
+malignant score has a **ROC AUC of 0.897** on the test set: it ranks a random
+cancer above a random benign lesion about 90% of the time.
+
+**Was the gap as large as expected?** The gap to the baselines is huge, as
+expected: the zero-shot model simply has no way to name a lesion, and the
+trivial one never refers anybody (it would send every cancer home). What
+surprised me is that 66% is **lower than I hoped** for 8 classes. Validation
+accuracy stopped improving at about 65% after ~30 epochs, so more epochs
+would not help much. The limits are probably the small 224-pixel images and
+the classes that genuinely look alike (see next section).
 
 ## Per-class evaluation and failure modes
 
-*Per-class AP50, or per-class precision/recall and the confusion matrix.
-Which class carries the headline number, which one is dragging, and what the
-model actually confuses with what. Show where it breaks, not just that it
-works.*
+**Positive class:** malignant or pre-malignant (AK + BCC + MEL + SCC).
+
+**Per class (test set):**
+
+| Class | Malignant? | Test images | Precision | Recall |
+|---|---|---|---|---|
+| VASC | no | 23 | 0.92 | **1.00** |
+| NV | no | 95 | **0.81** | 0.70 |
+| SCC | yes | 62 | 0.67 | 0.69 |
+| BKL | no | 85 | 0.56 | 0.67 |
+| AK | yes | 66 | 0.66 | 0.67 |
+| BCC | yes | 74 | 0.57 | 0.65 |
+| DF | no | 29 | 0.78 | 0.62 |
+| **MEL** | **yes** | **83** | 0.61 | **0.52** |
+
+**Confusion matrix (rows = true class, columns = predicted):**
+
+| true \ pred | AK | BCC | BKL | DF | MEL | NV | SCC | VASC |
+|---|---|---|---|---|---|---|---|---|
+| AK | **44** | 7 | 10 | 0 | 1 | 0 | 4 | 0 |
+| BCC | 10 | **48** | 3 | 3 | 4 | 0 | 6 | 0 |
+| BKL | 3 | 5 | **57** | 1 | 10 | 4 | 5 | 0 |
+| DF | 1 | 5 | 0 | **18** | 1 | 1 | 2 | 1 |
+| MEL | 3 | 5 | **17** | 0 | **43** | **10** | 4 | 1 |
+| NV | 1 | 5 | 10 | 1 | 12 | **66** | 0 | 0 |
+| SCC | 5 | 9 | 4 | 0 | 0 | 1 | **43** | 0 |
+| VASC | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **23** |
+
+**Which class carries the headline number.** VASC (100% recall: vascular
+lesions are red/purple, easy to tell apart) and NV (the highest precision).
+But VASC has only 23 test images, so its perfect score is not reliable.
+
+**Which class drags it down, and it is the one that matters most: melanoma.**
+Recall is only **52%**. Of 83 melanomas, **27 were called benign** (17
+benign keratosis, 10 mole). This is the dangerous mistake: melanoma, BKL and
+NV are all brown, irregular spots, and at 224×224 pixels the fine details
+that tell them apart are partly lost. Worse, some melanomas get a malignant
+score **close to 0** (e.g. 0.0005 and 0.0013): the model is confidently
+wrong, not just unsure. That is why no threshold can safely send people home
+(see the next sections).
+
+**Mistakes that don't matter for the decision.** Many errors are between
+the malignant classes themselves (AK, BCC and SCC confused with each other
+in 41 cases). For the business they are harmless: all of them lead to an
+appointment. For the binary decision at a 0.5 cut-off the model catches
+**83.5% of malignant lesions** and correctly clears **79.7% of benign ones**.
+
+**The dermoscope-frame shortcut is real.** I compared test images with and
+without the black dermoscope border:
+
+| | Images | Benign flagged as malignant (score ≥ 0.5) | Malignant caught |
+|---|---|---|---|
+| Without frame | 356 | **14%** | 81% |
+| With frame | 161 | **51%** | 87% |
+
+A benign lesion photographed **with the frame is almost 4 times more likely**
+to be flagged as cancer. The model partly learned "black frame → cancer",
+because cancers have the frame more often in this dataset. Patients' phone
+photos have no frame, so this shortcut won't help in production, and part
+of the model's apparent skill will disappear.
 
 ## Cost matrix and operating point
 
-*Your euro cost for each kind of error and where each figure came from. The
-base rate you assumed. The cost-against-threshold sweep, and the operating
-point you chose. State the assumption that would most change your answer if it
-were wrong.*
+**Costs per case (my assumptions):**
+
+| Outcome | Benign lesion | Malignant lesion |
+|---|---|---|
+| 🟢 Pass (sent home) | €0 (correct) | **missed cancer**: MEL €20,000 · SCC €3,000 · BCC €1,000 · AK €300 |
+| 🟡 Review (dermatologist looks at the photo) | €4 | €4 + €100 appointment |
+| 🔴 Fail (appointment) | €100 (wasted visit) | €100 |
+
+Where each figure comes from:
+
+- **€100 appointment:** roughly the price of one private dermatology
+  consultation in Spain. For a correctly referred cancer I don't count the
+  treatment, because it would be needed anyway.
+- **€4 review:** 2 minutes of a dermatologist's time at about €120/hour.
+- **Missed cancer:** the extra cost of finding it months later instead of now.
+  Melanoma is by far the highest: caught early, it is a short excision;
+  caught late, it can mean major surgery, scans and immunotherapy, and a
+  much lower chance of survival. SCC can spread but rarely does; BCC grows
+  slowly and almost never spreads (a later diagnosis mostly means a bigger
+  excision); AK is a pre-cancer that is cheap to treat. I chose round
+  numbers that keep this order and size, not exact prices.
+- I assume the **reviewing dermatologist decides correctly**. In reality
+  they would miss some cancers from a photo (see Limitations).
+
+**Base rate: 10%** of the photos the service receives are malignant or
+pre-malignant (melanoma about 3%, since it is 29% of the positives in the
+test set). The test set is 55% malignant, so every test image is
+**re-weighted** so that positives count for 10% of the total, and costs are
+given per 1,000 photos.
+
+**The sweep.** For one threshold (model alone: below → home, above →
+appointment) I tried every threshold from 0 to 1 in steps of 0.01 on the
+**validation** set and kept the cheapest. For two thresholds I tried every
+pair (5,151 pairs) on validation, kept the cheapest one that fits the
+dermatologists available (next section), then measured it **once** on the
+test set. The dashboard shows the cost curve with the chosen point marked.
+
+**What the sweep found:**
+
+- **Model alone:** the cheapest threshold is **0.01**, which sends almost
+  everybody to an appointment, and it still costs **€92,240 per 1,000
+  photos**. Even at 0.01 it sends 4 of the 83 test melanomas home, because
+  the model is confidently wrong about them.
+- **Chosen operating point (2 dermatologists): pass below 0.01, appointment
+  from 0.92, review in between.** On the test set this costs **€46,950 per
+  1,000 photos**: 35.8% of photos pass, 50.9% go to review and 13.2% go
+  straight to an appointment.
+
+**The assumption that would most change the answer** is the cost of a missed
+melanoma, together with the base rate. I re-ran the choice with other values:
+
+| Change | Thresholds (pass / appointment) | Test cost per 1,000 |
+|---|---|---|
+| As assumed (MEL €20,000, base rate 10%) | 0.01 / 0.92 | €46,950 |
+| MEL miss €5,000 | 0.04 / 0.99 (more people pass) | €28,671 |
+| MEL miss €50,000 | **nobody passes** / 0.04 | €57,931 |
+| Base rate 5% | 0.01 / 0.91 | €29,190 |
+| Base rate 20% | **nobody passes** / 0.06 | €58,983 |
+| Review €10 or €20 instead of €4 | 0.01 / 0.92 (no change) | €50,007 / €55,101 |
+
+So: **if a missed melanoma costs more than about €50,000, or if more than
+about 20% of photos are cancers, the model should never send anyone home**,
+and its only job is to choose who gets an appointment directly. The price of
+a review hardly matters.
 
 ## What a person still has to check
 
-*Your two thresholds, and what share of cases they send to a person. How many
-that is per day, how long one takes to check, and how many people that needs.
-Is that realistic? Then your design priced against the three alternatives:
-doing nothing, having a person check everything, and letting the model decide
-on its own.*
+**Thresholds: pass below 0.01, appointment from 0.92, review in between.**
+
+- **Volume:** I assume the service receives **500 photos a day**.
+- **Review share:** **50.9%** of photos → about **255 photos a day**.
+- **Time:** about **2 minutes** per photo → 8.5 hours of dermatologist time a day.
+- **People:** if each dermatologist spends 4 hours a day on photo review
+  (120 photos), that needs **2.1 dermatologists**.
+- **Is it realistic?** I assumed the service has **2 dermatologists** for
+  review and chose the thresholds so the review share fits that on the
+  validation set (≤ 48%). On the test set it came out slightly higher
+  (51%, or 2.1 people), so in practice the team would be **at capacity**
+  with no slack for busy days. It is realistic only if both dermatologists
+  really commit 4 hours a day.
+
+**Compared with the alternatives (test set, 10% base rate, per 1,000 photos):**
+
+| Strategy | Cost | Reviewed | Cancers sent home | Melanomas sent home (of 83) |
+|---|---|---|---|---|
+| Do nothing (everyone home) | €680,632 | 0% | 100% | 83 |
+| Model alone (threshold 0.01) | €92,240 | 0% | 1.4% | 4 |
+| **Model + review band (2 dermatologists)** | **€46,950** | **51%** | **1.4%** | **4** |
+| Dermatologist checks every photo | **€14,000** | 100% | 0% | 0 |
+
+And the best design for each number of reviewing dermatologists:
+
+| Dermatologists | Thresholds | Cost per 1,000 | Reviewed | Melanomas sent home |
+|---|---|---|---|---|
+| 1 | 0.01 / 0.21 | €68,441 | 26% | 4 |
+| **2 (chosen)** | **0.01 / 0.92** | **€46,950** | **51%** | **4** |
+| 3 | nobody passes / 0.43 | €33,772 | 71% | 0 |
+| 4.2 (everything) | — | €14,000 | 100% | 0 |
+
+**What this means.** With these costs the honest conclusion is that **the
+model does not beat a dermatologist looking at every photo**. A review costs
+€4 and a missed melanoma €20,000, and the model gives some melanomas a score
+near 0, so letting it send people home is always more expensive than paying
+a dermatologist to look. The model is still very useful when dermatologists
+are **scarce**: compared with doing nothing it cuts the cost by 93%, and it
+puts the clearest cancers (13% of photos) straight into appointments.
+
+**My recommendation.** Each extra reviewing dermatologist saves roughly
+€13,000–21,000 per 1,000 photos (€6,500+ a day at 500 photos), while 4 hours
+of their time costs about €480 a day. So the service should **staff the
+review**: with 3 dermatologists no melanoma in the test set is sent home. I
+would **not ship the "pass" band** (sending patients home automatically)
+until the model's melanoma recall is much better.
 
 ## Limitations & next steps
 
-*Real limitations you found, and concretely how you'd address each one with
-more time or data. Not generic hedging.*
+- **Confident mistakes on melanoma.** 27 of 83 melanomas are called benign,
+  some with a score near 0. *Next step:* train at a higher resolution (e.g.
+  384 or 512 pixels, from the original ISIC images) and try `yolo11s-cls`;
+  give melanoma a higher weight in the training loss so mistaking it costs
+  the model more.
+- **The dermoscope-frame shortcut.** Benign lesions with a frame are flagged
+  as cancer 51% of the time vs 14% without. *Next step:* crop or mask the
+  black border before training and testing, so the model has to look at the
+  lesion.
+- **Dermoscope images, not phone photos.** The test set doesn't look like
+  what patients send, so all results are an upper bound. *Next step:* before
+  any real use, collect a few hundred phone photos with a confirmed
+  diagnosis and measure the model on those.
+- **The costs and the base rate are my assumptions.** The answer changes if
+  a missed melanoma costs more than ~€50,000 or the base rate is above ~20%.
+  *Next step:* get the real share of cancers among the photos the service
+  receives, and the real cost of late vs early treatment from the clinic.
+- **I assume the reviewing dermatologist is always right.** Judging from a
+  photo, they would miss some cancers, which makes "review" more expensive
+  than I assume. *Next step:* add the dermatologist's own miss rate on
+  photos to the cost of the review outcome.
+- **Small classes and small test set.** DF (29) and VASC (23) test images are
+  too few to trust their numbers, and the chosen thresholds sit at the edge
+  of the score range (0.01, 0.92), where a handful of images decide the
+  result. *Next step:* use cross-validation and report confidence intervals.
+- **Five test images also appear in training** (4 SCC, 1 BKL). *Next step:*
+  remove the near-duplicates from the test set and report both numbers.
 
 ## Generative AI use disclosure
 
-*Per the syllabus AI Policy: what you used and how, or "no AI content used."*
+I used **Claude (Anthropic), through Claude Code**, throughout this
+assignment, as allowed by the professor for this assignment. It helped me
+compare and choose the Roboflow dataset, analyse the dataset (class counts,
+duplicates and the dermoscope-frame check), write `train.py` and `app.py`,
+run the training and the cost sweeps, test the dashboard, and draft this
+report. I reviewed the framing, the cost assumptions, the choice of 2
+reviewing dermatologists and the conclusions, and I can explain them.
