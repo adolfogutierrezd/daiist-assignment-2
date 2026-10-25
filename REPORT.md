@@ -226,8 +226,8 @@ lesions are red/purple, easy to tell apart) and NV (the highest precision).
 But VASC has only 23 test images, so its perfect score is not reliable.
 
 **Which class drags it down, and it is the one that matters most: melanoma.**
-Recall is only **52%**. Of 83 melanomas, **27 were called benign** (17
-benign keratosis, 10 mole). This is the dangerous mistake: melanoma, BKL and
+Recall is only **52%**. Of 83 melanomas, **28 were called benign** (17
+benign keratosis, 10 mole, 1 vascular lesion). This is the dangerous mistake: melanoma, BKL and
 NV are all brown, irregular spots, and at 224×224 pixels the fine details
 that tell them apart are partly lost. Worse, some melanomas get a malignant
 score **close to 0** (e.g. 0.0005 and 0.0013): the model is confidently
@@ -372,7 +372,7 @@ until the model's melanoma recall is much better.
 
 ## Limitations & next steps
 
-- **Confident mistakes on melanoma.** 27 of 83 melanomas are called benign,
+- **Confident mistakes on melanoma.** 28 of 83 melanomas are called benign,
   some with a score near 0. *Next step:* train at a higher resolution (e.g.
   384 or 512 pixels, from the original ISIC images) and try `yolo11s-cls`;
   give melanoma a higher weight in the training loss so mistaking it costs
