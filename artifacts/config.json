@@ -1,0 +1,90 @@
+{
+  "dataset": {
+    "workspace": "riteshs-workspace-qkstg",
+    "project": "skin-lesion-classification-sh4sk",
+    "version": 2
+  },
+  "classes": [
+    "AK",
+    "BCC",
+    "BKL",
+    "DF",
+    "MEL",
+    "NV",
+    "SCC",
+    "VASC"
+  ],
+  "positive_classes": [
+    "AK",
+    "BCC",
+    "MEL",
+    "SCC"
+  ],
+  "low": 0.01,
+  "high": 0.92,
+  "model_alone_threshold": 0.01,
+  "appointment": 100,
+  "review": 4,
+  "miss_cost": {
+    "MEL": 20000,
+    "SCC": 3000,
+    "BCC": 1000,
+    "AK": 300
+  },
+  "base_rate": 0.1,
+  "daily_photos": 500,
+  "reviews_per_derm_per_day": 120,
+  "dermatologists": 2,
+  "baselines": {
+    "finetuned yolo11n-cls": {
+      "accuracy": 0.662
+    },
+    "trivial: always 'NV' (refers nobody)": {
+      "accuracy": 0.184
+    },
+    "zero-shot ImageNet yolo11n-cls": {
+      "accuracy": 0.0
+    }
+  },
+  "zero_shot_top_labels": {
+    "tick": 210,
+    "face_powder": 75,
+    "velvet": 52,
+    "Angora": 46,
+    "nematode": 18
+  },
+  "frame_check": {
+    "without frame": {
+      "images": 356,
+      "share_malignant": 0.458,
+      "accuracy": 0.708,
+      "benign_flagged_malignant": 0.14,
+      "malignant_recall": 0.81
+    },
+    "with frame": {
+      "images": 161,
+      "share_malignant": 0.758,
+      "accuracy": 0.559,
+      "benign_flagged_malignant": 0.513,
+      "malignant_recall": 0.869
+    }
+  },
+  "staffing": {
+    "daily_photos": 500,
+    "reviews_per_day": 254.7,
+    "minutes_per_review": 2,
+    "reviews_per_dermatologist_per_day": 120,
+    "dermatologists_available": 2,
+    "dermatologists_needed": 2.12,
+    "everyone_reviewed_dermatologists": 4.17
+  },
+  "training": {
+    "model": "yolo11n-cls",
+    "epochs_max": 40,
+    "patience": 10,
+    "imgsz": 224,
+    "batch": 64,
+    "device": "mps",
+    "flipud": 0.5
+  }
+}

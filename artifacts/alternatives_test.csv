@@ -1,0 +1,5 @@
+strategy,low,high,cost_per_1000,review_share,missed_cancer_share,missed_melanoma
+do nothing (send everyone home),1.01,1.01,680631.6,0.0,1.0,83.0
+dermatologist checks every photo,0.0,1.01,14000.0,1.0,0.0,0.0
+model alone (threshold 0.01),0.01,0.01,92240.2,0.0,0.014,4.0
+model + review band (0.01-0.92),0.01,0.92,46950.2,0.5094,0.014,4.0
